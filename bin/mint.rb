@@ -1,8 +1,6 @@
 require 'csv'
 require 'yaml'
 require 'rails/all'
-require 'active_record'
-require 'active_support'
 require 'sqlite3'
 
 begin # define ActiveRecord objects
@@ -26,7 +24,7 @@ begin # define ActiveRecord objects
 end
 
 def dateobj string
-  Date.strptime(str, "%m/%d/%Y").strftime("%d-%m-%Y")
+  Date.strptime(string, "%m/%d/%Y").strftime("%d-%m-%Y")
 end
 
 def create_database_from_csv
@@ -73,41 +71,52 @@ def create_database_from_csv
   end
 end
 
+#create_database_from_csv
+
 first_transaction = Transaction.order('date ASC').limit(1).first
 last_transaction = Transaction.order('date DESC').limit(1).first
+
 done_months = []
 all_credit = []
 all_debit = []
 all_net = []
 
 for_csving_purposes = []
+
+def money_earned_in_month month_transactions_arel
+  @credit ||=  TransactionType.find_by_name 'credit'
+  month_transactions_arel.where "transaction_type_id = #{@credit.id}"
+end
+
+def money_spent_in_month month_transactions_arel
+  @debit ||=  TransactionType.find_by_name 'debit'
+  month_transactions_arel.where "transaction_type_id = #{@debit.id}"
+end
+
 (first_transaction.date..last_transaction.date).each do |date|
-  flag = date.strftime("%Y-%m")
-  next if done_months.include? flag
+  year_and_month = date.strftime("%Y-%m")
+  next if done_months.include? year_and_month
 
-  b = date.beginning_of_month.to_s(:db)
-  e = date.end_of_month.to_s(:db)
-  t_this_month = Transaction.where "date >= ? and date <= ?", b, e
-  money_in = TransactionType.find_by_name 'credit'
-  money_out = TransactionType.find_by_name 'debit'
+  start_o_month = date.beginning_of_month.to_s(:db)
+  end_o_month = date.end_of_month.to_s(:db)
+  transactions = Transaction.where "date >= ? and date <= ?", start_o_month, end_o_month
 
-  credits = t_this_month.where "transaction_type_id = #{money_in.id}"# and account_id in (2, 10)"
-  debits =  t_this_month.where "transaction_type_id = #{money_out.id}"# and account_id in (1, 15)"
+  credits = money_earned_in_month transactions
+  debits =  money_spent_in_month transactions
 
+  paying_off_credit_card_debt = debits.where("description like '%transfer to CREDIT%'").map(&:amount).inject(&:+) || 0
   credits_sum = credits.map(&:amount).inject(&:+) || 0
   debits_sum = debits.map(&:amount).inject(&:+) || 0
   all_credit << credits_sum
   all_debit << debits_sum
   all_net << (credits_sum - debits_sum)
 
-  for_csving_purposes << [flag, credits_sum, debits_sum, credits_sum - debits_sum]
-  done_months << flag
+  for_csving_purposes << [year_and_month, credits_sum, paying_off_credit_card_debt, debits_sum, credits_sum - debits_sum]
+  done_months << year_and_month
 end
 
 all_credit.delete_if { |x| x.zero?}
 all_debit.delete_if { |x| x.zero?}
-all_credit.delete_if { |x| x == 49690 }
-all_net.delete_if { |x| x > 40000 }
 
 puts "Minimum credit: #{all_credit.min}"
 puts "Maximum credit: #{all_credit.max}"
